@@ -5,9 +5,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include <cmc_es_monitoring.h>   // tA664ESMonitoring
-#include <cmc_sw_monitoring.h>   // tA664SWMonitoring (status + port[12])
-#include <cmc_other_types.h>     // Pcs_profile_stats, COUNTERS
+#include "cmc_es_monitoring.h"   // tA664ESMonitoring
+#include "cmc_sw_monitoring.h"   // tA664SWMonitoring (status + port[12])
+#include "cmc_other_types.h"     // Pcs_profile_stats, COUNTERS
 
 // ============================================================================
 // CMC Health Monitor
