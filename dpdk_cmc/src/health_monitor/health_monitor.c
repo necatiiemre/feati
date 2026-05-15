@@ -8,6 +8,79 @@
 #include <inttypes.h>
 
 // ============================================================================
+// SW_MON Fragment (Parça) Yönetimi
+// ----------------------------------------------------------------------------
+// 2344 byte'lık yapı iki parça halinde gelir:
+// Parça 1: 1400 byte veri + 1 byte seq = 1401 B
+// Parça 2: 944 byte veri + 1 byte seq  = 945 B
+// ============================================================================
+#define SW_MON_PART1_DATA_LEN 1400
+#define SW_MON_PART2_DATA_LEN 944
+#define SW_MON_FULL_DATA_LEN  (SW_MON_PART1_DATA_LEN + SW_MON_PART2_DATA_LEN) // 2344
+
+#define SW_MON_PART1_TOTAL_LEN (SW_MON_PART1_DATA_LEN + 1) // 1401
+#define SW_MON_PART2_TOTAL_LEN (SW_MON_PART2_DATA_LEN + 1) // 945
+
+// Her VL (8009, 8109) için ayrı bir birleştirme alanı
+typedef struct {
+    uint8_t  buffer[SW_MON_FULL_DATA_LEN];
+    bool     part1_received;
+} sw_reassembly_t;
+
+static sw_reassembly_t g_sw_reassembly[2]; // Index 0: 8009, Index 1: 8109
+
+// Helper: VL-ID'den index bulma
+static inline int get_sw_idx(uint16_t vl_id) {
+    if (vl_id == 8009) return 0;
+    if (vl_id == 8109) return 1;
+    return -1;
+}
+
+// SW_MON için Endianness Swap (tüm status ve 12 portu döner)
+static void swap_sw(tA664SWMonitoring *s)
+{
+    // 1. Status Swap
+    s->status.A664_SW_TOT_TX_DATA_NUM = be64(s->status.A664_SW_TOT_TX_DATA_NUM);
+    s->status.A664_SW_TOT_RX_DATA_NUM = be64(s->status.A664_SW_TOT_RX_DATA_NUM);
+    s->status.A664_SW_TRANSCEIVER_TEMP = be64(s->status.A664_SW_TRANSCEIVER_TEMP);
+    s->status.A664_SW_SHARED_TRANSCEIVER_TEMP = be64(s->status.A664_SW_SHARED_TRANSCEIVER_TEMP);
+    s->status.A664_SW_DEVICE_ID = be16(s->status.A664_SW_DEVICE_ID);
+    s->status.A664_SW_VERSION = be64(s->status.A664_SW_VERSION);
+    s->status.A664_SW_ES_VERSION = be64(s->status.A664_SW_ES_VERSION);
+    s->status.A664_SW_TIME_OF_DAY_NS = be64(s->status.A664_SW_TIME_OF_DAY_NS);
+    s->status.A664_SW_TIME_OF_DAY_S = be64(s->status.A664_SW_TIME_OF_DAY_S);
+    s->status.A664_SW_INTERNAL_VOLTAGE = be16(s->status.A664_SW_INTERNAL_VOLTAGE);
+    s->status.A664_SW_TEMPERATURE = be16(s->status.A664_SW_TEMPERATURE);
+    s->status.A664_SW_CONFIG_ID = be16(s->status.A664_SW_CONFIG_ID);
+
+    // 2. Ports Swap (12 Port)
+    for(int i = 0; i < A664_SW_MAX_PORT_COUNT; i++) {
+        s->port[i].A664_SW_PORT_ID = be64(s->port[i].A664_SW_PORT_ID);
+        s->port[i].A664_SW_CRC_ERR_CNT = be64(s->port[i].A664_SW_CRC_ERR_CNT);
+        s->port[i].A664_SW_ALIGNMENT_ERR_CNT = be64(s->port[i].A664_SW_ALIGNMENT_ERR_CNT);
+        s->port[i].A664_SW_LMIN_ERR_CNT = be64(s->port[i].A664_SW_LMIN_ERR_CNT);
+        s->port[i].A664_SW_LMAX_ERR_CNT = be64(s->port[i].A664_SW_LMAX_ERR_CNT);
+        s->port[i].A664_SW_VLMIN_ERR_CNT = be64(s->port[i].A664_SW_VLMIN_ERR_CNT);
+        s->port[i].A664_SW_VLMAX_ERR_CNT = be64(s->port[i].A664_SW_VLMAX_ERR_CNT);
+        s->port[i].A664_SW_MAC_ERR_CNT = be64(s->port[i].A664_SW_MAC_ERR_CNT);
+        s->port[i].A664_SW_TOKEN_ERR_CNT = be64(s->port[i].A664_SW_TOKEN_ERR_CNT);
+        s->port[i].A664_SW_BE_FRAME = be64(s->port[i].A664_SW_BE_FRAME);
+        s->port[i].A664_SW_TX_FRAME_CNT = be64(s->port[i].A664_SW_TX_FRAME_CNT);
+        s->port[i].A664_SW_RX_FRAME_CNT = be64(s->port[i].A664_SW_RX_FRAME_CNT);
+        s->port[i].A664_SW_VL_RX_PORT_ERR = be64(s->port[i].A664_SW_VL_RX_PORT_ERR);
+        s->port[i].A664_SW_MAX_DELAY_ERR_CNT = be64(s->port[i].A664_SW_MAX_DELAY_ERR_CNT);
+        s->port[i].A664_SW_IN_PORT_Q_OVERFLOW_CNT = be64(s->port[i].A664_SW_IN_PORT_Q_OVERFLOW_CNT);
+        s->port[i].A664_SW_UNDEF_VL_ERR = be64(s->port[i].A664_SW_UNDEF_VL_ERR);
+        s->port[i].A664_SW_UNDEF_BE_ERR = be64(s->port[i].A664_SW_UNDEF_BE_ERR);
+        s->port[i].A664_SW_HP_Q_OVERFLOW = be64(s->port[i].A664_SW_HP_Q_OVERFLOW);
+        s->port[i].A664_SW_LP_Q_OVERFLOW = be64(s->port[i].A664_SW_LP_Q_OVERFLOW);
+        s->port[i].A664_SW_BE_Q_OVERFLOW = be64(s->port[i].A664_SW_BE_Q_OVERFLOW);
+        s->port[i].A664_SW_CONF_MAX_DELAY_PARAM = be64(s->port[i].A664_SW_CONF_MAX_DELAY_PARAM);
+        s->port[i].A664_SW_PORT_SPEED = be64(s->port[i].A664_SW_PORT_SPEED);
+    }
+}
+
+// ============================================================================
 // BE → host endian dönüştürücüler
 // ----------------------------------------------------------------------------
 // CMC firmware HM struct'larını wire'a big-endian yazıyor; x86_64 (LE) host'ta
@@ -290,8 +363,12 @@ static size_t hm_ring_drain(hm_queue_item_t *out, size_t max)
 #define HM_COUNTERS_DPM_TOTAL_LEN (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_DPM))        // 1007
 #define HM_COUNTERS_DSM_TOTAL_LEN (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_DSM))        // 1007
 
+// health_monitor.c içinde olması gereken statik birleştirme alanı
+static sw_reassembly_t g_sw_reassembly[2] = {0}; // 0: VL 8009, 1: VL 8109 için
+
 void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
 {
+    // 1. Genel Sayaç ve Güvenlik Kontrolleri
     __atomic_add_fetch(&g_hm_rx_total, 1, __ATOMIC_RELAXED);
 
     if (payload == NULL || len < HM_FRAME_OVERHEAD) {
@@ -300,13 +377,44 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
         return;
     }
 
+    // UDP payload başındaki DTN header'ı geçiyoruz (mevcut yapıda 0 byte)
     const uint8_t *body = payload + HM_DTN_HEADER_LEN;
 
+    // Ring buffer'a atılacak item'ı hazırla
     hm_queue_item_t item;
     memset(&item, 0, sizeof(item));
-    item.vl_id           = vl_id;
+    item.vl_id = vl_id;
     item.rx_timestamp_ns = now_ns();
 
+    // 2. SW_MON Parça Birleştirme (Reassembly) Mantığı
+    int sw_idx = get_sw_idx(vl_id);
+    if (sw_idx != -1) {
+        // PARÇA 1 (1401 B)
+        if (len == SW_MON_PART1_TOTAL_LEN) {
+            memcpy(g_sw_reassembly[sw_idx].buffer, body, SW_MON_PART1_DATA_LEN);
+            g_sw_reassembly[sw_idx].part1_received = true;
+            return; // İkinci parçayı bekle
+        } 
+        // PARÇA 2 (945 B)
+        else if (len == SW_MON_PART2_TOTAL_LEN) {
+            if (g_sw_reassembly[sw_idx].part1_received) {
+                // Buffer'ın arkasına ekle (1400. byte'tan itibaren)
+                memcpy(g_sw_reassembly[sw_idx].buffer + SW_MON_PART1_DATA_LEN, body, SW_MON_PART2_DATA_LEN);
+                
+                item.kind = HM_ITEM_DTN_SW_MONITORING;
+                memcpy(&item.payload.sw_mon, g_sw_reassembly[sw_idx].buffer, SW_MON_FULL_DATA_LEN);
+                
+                swap_sw(&item.payload.sw_mon); // Endianness düzenle
+                __atomic_add_fetch(&g_hm_rx_sw_mon, 1, __ATOMIC_RELAXED);
+                
+                g_sw_reassembly[sw_idx].part1_received = false; // Resetle
+                hm_ring_push(&item);
+                return;
+            }
+        }
+    }
+
+    // 3. Standart (Tek Parçalı) Paketlerin Dispatch Edilmesi
     if (len == HM_PCS_TOTAL_LEN) {
         item.kind = HM_ITEM_PCS_PROFILE;
         memcpy(&item.payload.pcs, body, sizeof(Pcs_profile_stats));
@@ -331,22 +439,14 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
         swap_counters_dsm(&item.payload.counters_dsm);
         __atomic_add_fetch(&g_hm_rx_counters_dsm, 1, __ATOMIC_RELAXED);
     }
-    // SW_MON şimdilik firmware'dan gelmiyor — açıldığında:
-    // else if (len == HM_FRAME_OVERHEAD + (uint16_t)sizeof(tA664SWMonitoring)) {
-    //     if (!hm_vl_id_accepts_sw_mon(vl_id)) {
-    //         __atomic_add_fetch(&g_hm_rx_sw_on_wrong_vl, 1, __ATOMIC_RELAXED);
-    //         return;
-    //     }
-    //     item.kind = HM_ITEM_DTN_SW_MONITORING;
-    //     memcpy(&item.payload.sw_mon, body, sizeof(tA664SWMonitoring));
-    //     __atomic_add_fetch(&g_hm_rx_sw_mon, 1, __ATOMIC_RELAXED);
-    // }
     else {
+        // Tanımlanamayan paket
         __atomic_add_fetch(&g_hm_rx_unknown_len, 1, __ATOMIC_RELAXED);
         unknown_record(vl_id, len, payload);
         return;
     }
 
+    // Paketi dashboard thread'ine gönder
     hm_ring_push(&item);
 }
 
