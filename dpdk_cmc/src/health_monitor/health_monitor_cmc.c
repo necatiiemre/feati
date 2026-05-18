@@ -197,10 +197,9 @@ static void print_counters_body(const uint64_t *send, const uint64_t *send_fail,
         snprintf(msg, sizeof(msg), "(Tüm %u bağlantı noktası için sayaçlar sıfır)", rows);
         printf("║  " C_DIM "%-110s" C_RESET " ║\n", msg);
     }
-    
+
     table_footer();
 }
-#pragma GCC diagnostic pop
 
 void print_counters_dpm(const COUNTERS_DPM *d, uint16_t vl_id, unsigned packets)
 {
