@@ -36,6 +36,17 @@ static inline int get_sw_idx(uint16_t vl_id) {
     return -1;
 }
 
+// ============================================================================
+// BE → host endian dönüştürücüler
+// ----------------------------------------------------------------------------
+// CMC firmware HM struct'larını wire'a big-endian yazıyor; x86_64 (LE) host'ta
+// memcpy sonrası tüm multi-byte alanlar swap edilmeli. uint8 alanlarda swap
+// gereksiz.
+// ============================================================================
+static inline uint64_t be64(uint64_t v) { return __builtin_bswap64(v); }
+static inline uint32_t be32(uint32_t v) { return __builtin_bswap32(v); }
+static inline uint16_t be16(uint16_t v) { return __builtin_bswap16(v); }
+
 // SW_MON için Endianness Swap (tüm status ve 12 portu döner)
 static void swap_sw(tA664SWMonitoring *s)
 {
@@ -54,7 +65,7 @@ static void swap_sw(tA664SWMonitoring *s)
     s->status.A664_SW_CONFIG_ID = be16(s->status.A664_SW_CONFIG_ID);
 
     // 2. Ports Swap (12 Port)
-    for(int i = 0; i < A664_SW_MAX_PORT_COUNT; i++) {
+    for(unsigned i = 0; i < A664_SW_MAX_PORT_COUNT; i++) {
         s->port[i].A664_SW_PORT_ID = be64(s->port[i].A664_SW_PORT_ID);
         s->port[i].A664_SW_CRC_ERR_CNT = be64(s->port[i].A664_SW_CRC_ERR_CNT);
         s->port[i].A664_SW_ALIGNMENT_ERR_CNT = be64(s->port[i].A664_SW_ALIGNMENT_ERR_CNT);
@@ -79,17 +90,6 @@ static void swap_sw(tA664SWMonitoring *s)
         s->port[i].A664_SW_PORT_SPEED = be64(s->port[i].A664_SW_PORT_SPEED);
     }
 }
-
-// ============================================================================
-// BE → host endian dönüştürücüler
-// ----------------------------------------------------------------------------
-// CMC firmware HM struct'larını wire'a big-endian yazıyor; x86_64 (LE) host'ta
-// memcpy sonrası tüm multi-byte alanlar swap edilmeli. uint8 alanlarda swap
-// gereksiz.
-// ============================================================================
-static inline uint64_t be64(uint64_t v) { return __builtin_bswap64(v); }
-static inline uint32_t be32(uint32_t v) { return __builtin_bswap32(v); }
-static inline uint16_t be16(uint16_t v) { return __builtin_bswap16(v); }
 
 static void swap_pcs(Pcs_profile_stats *p)
 {
