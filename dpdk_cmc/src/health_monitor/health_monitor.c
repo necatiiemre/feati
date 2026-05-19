@@ -194,7 +194,40 @@ static void swap_counters_dsm(COUNTERS_DSM *c)
         c->pkg_drop_count[i]  = be64(c->pkg_drop_count[i]);
     }
 }
+
+static void swap_counters_inter_dpm(COUNTERS_INTER_DPM *c)
+{
+    for (int i = 0; i < SRC_DPM_MAX_CONN; i++) {
+        c->send_count[i]      = be64(c->send_count[i]);
+        c->send_fail_count[i] = be64(c->send_fail_count[i]);
+        c->receive_count[i]   = be64(c->receive_count[i]);
+        c->crc_pass_count[i]  = be64(c->crc_pass_count[i]);
+        c->crc_fail_count[i]  = be64(c->crc_fail_count[i]);
+        c->pkg_drop_count[i]  = be64(c->pkg_drop_count[i]);
+    }
+}
 #pragma GCC diagnostic pop
+
+// ============================================================================
+// Paket uzunluğu sabitleri (UDP payload toplam uzunluğu = struct + 1 seq)
+// ----------------------------------------------------------------------------
+//   137 B = 136 (Pcs_profile_stats)         + 1 (seq)
+//   353 B = 352 (tA664ESMonitoring)         + 1 (seq)
+//   961 B = 960 (COUNTERS_DPM,      20×6×8) + 1 (seq)
+//   721 B = 720 (COUNTERS_INTER_DPM,15×6×8) + 1 (seq)
+//   385 B = 384 (COUNTERS_DSM,       8×6×8) + 1 (seq)
+//  1401 B = SW_MON parça 1 (1400 veri + 1 seq)
+//   945 B = SW_MON parça 2 ( 944 veri + 1 seq)
+// ============================================================================
+#define HM_DTN_HEADER_LEN     0     // UDP payload zaten DTN header'sız geliyor
+#define HM_DTN_TRAILER_LEN    1     // pakette son 1 byte: sequence number
+#define HM_FRAME_OVERHEAD     (HM_DTN_HEADER_LEN + HM_DTN_TRAILER_LEN)
+
+#define HM_PCS_TOTAL_LEN                (HM_FRAME_OVERHEAD + (uint16_t)sizeof(Pcs_profile_stats))
+#define HM_ES_MON_TOTAL_LEN             (HM_FRAME_OVERHEAD + (uint16_t)sizeof(tA664ESMonitoring))
+#define HM_COUNTERS_DPM_TOTAL_LEN       (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_DPM))
+#define HM_COUNTERS_INTER_DPM_TOTAL_LEN (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_INTER_DPM))
+#define HM_COUNTERS_DSM_TOTAL_LEN       (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_DSM))
 
 // ============================================================================
 // "unknown_len" teşhis tablosu
@@ -254,7 +287,14 @@ static void unknown_dump_dashboard(void)
         return;
     }
     printf("\n[HM] UNKNOWN-LEN observed (vl_id, total_len) histogram:\n");
-    printf("     expected sizes:  PCS=183  ES_MON=399  DPM=1007  DSM=431\n");
+    printf("     expected sizes:  PCS=%u  ES_MON=%u  DPM=%u  INTER_DPM=%u  DSM=%u  SW_MON_P1=%u  SW_MON_P2=%u\n",
+           (unsigned)HM_PCS_TOTAL_LEN,
+           (unsigned)HM_ES_MON_TOTAL_LEN,
+           (unsigned)HM_COUNTERS_DPM_TOTAL_LEN,
+           (unsigned)HM_COUNTERS_INTER_DPM_TOTAL_LEN,
+           (unsigned)HM_COUNTERS_DSM_TOTAL_LEN,
+           (unsigned)SW_MON_PART1_TOTAL_LEN,
+           (unsigned)SW_MON_PART2_TOTAL_LEN);
     for (int i = 0; i < g_unknown_count; i++) {
         hm_unknown_bucket_t *b = &g_unknown[i];
         printf("  VL %5u  len=%-5u  count=%-8" PRIu64 "  first %u bytes:\n",
@@ -290,15 +330,16 @@ static size_t          g_ring_tail = 0;   // next slot to read
 static pthread_mutex_t g_ring_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Diagnostic sayaçlar (RELAXED atomic, lock dışında)
-static volatile uint64_t g_hm_rx_total          = 0;
-static volatile uint64_t g_hm_rx_pcs            = 0;
-static volatile uint64_t g_hm_rx_counters_dpm   = 0;
-static volatile uint64_t g_hm_rx_counters_dsm   = 0;
-static volatile uint64_t g_hm_rx_es_mon         = 0;
-static volatile uint64_t g_hm_rx_sw_mon         = 0;
-static volatile uint64_t g_hm_rx_unknown_len    = 0;
-static volatile uint64_t g_hm_rx_sw_on_wrong_vl = 0;
-static volatile uint64_t g_hm_rx_drop           = 0;
+static volatile uint64_t g_hm_rx_total             = 0;
+static volatile uint64_t g_hm_rx_pcs               = 0;
+static volatile uint64_t g_hm_rx_counters_dpm      = 0;
+static volatile uint64_t g_hm_rx_counters_inter_dpm = 0;
+static volatile uint64_t g_hm_rx_counters_dsm      = 0;
+static volatile uint64_t g_hm_rx_es_mon            = 0;
+static volatile uint64_t g_hm_rx_sw_mon            = 0;
+static volatile uint64_t g_hm_rx_unknown_len       = 0;
+static volatile uint64_t g_hm_rx_sw_on_wrong_vl    = 0;
+static volatile uint64_t g_hm_rx_drop              = 0;
 
 static inline uint64_t now_ns(void)
 {
@@ -342,30 +383,11 @@ static size_t hm_ring_drain(hm_queue_item_t *out, size_t max)
 // RX fast-path
 // ----------------------------------------------------------------------------
 // rx_worker hm_handle_packet'a UDP payload başlangıcını geçer (DPDK fast-path
-// L2+VLAN+IP+UDP'yi zaten skip etmiştir — payload_off=46). UDP payload'unun
-// içinde ek bir application header YOK; struct doğrudan başlar, en sonda
-// 1 byte sequence trailer vardır. Tür ayrımı toplam payload uzunluğuna göre:
-//
-//   137 B = 136  (Pcs_profile_stats, natural-aligned) + 1 (seq)
-//   353 B = 352  (tA664ESMonitoring, natural-aligned) + 1 (seq)
-//   961 B = 960  (COUNTERS_DPM,      packed 6×20×8)   + 1 (seq)
-//   385 B = 384  (COUNTERS_DSM,      packed 6× 8×8)   + 1 (seq)   [formatı revize edilecek]
-//
-// SW_MON (tA664SWMonitoring, 2344 B + 1 = 2345) firmware tarafından henüz
-// gönderilmediği için dispatch'i yorum satırında.
+// L2+VLAN+IP+UDP'yi zaten skip etmiştir). UDP payload'unda ek application
+// header YOK; struct doğrudan başlar, son 1 byte sequence trailer.
+// Tür ayrımı toplam payload uzunluğuna göre — uzunluk sabitleri yukarıda.
+// SW_MON 2344 B olduğu için iki parça halinde gelir (1401 + 945).
 // ============================================================================
-#define HM_DTN_HEADER_LEN     0     // UDP payload zaten DTN header'sız geliyor
-#define HM_DTN_TRAILER_LEN    1     // pakette son 1 byte: sequence number
-#define HM_FRAME_OVERHEAD     (HM_DTN_HEADER_LEN + HM_DTN_TRAILER_LEN)
-
-#define HM_PCS_TOTAL_LEN          (HM_FRAME_OVERHEAD + (uint16_t)sizeof(Pcs_profile_stats))   // 183
-#define HM_ES_MON_TOTAL_LEN       (HM_FRAME_OVERHEAD + (uint16_t)sizeof(tA664ESMonitoring))   // 399
-#define HM_COUNTERS_DPM_TOTAL_LEN (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_DPM))        // 1007
-#define HM_COUNTERS_DSM_TOTAL_LEN (HM_FRAME_OVERHEAD + (uint16_t)sizeof(COUNTERS_DSM))        // 1007
-
-// health_monitor.c içinde olması gereken statik birleştirme alanı
-static sw_reassembly_t g_sw_reassembly[2] = {0}; // 0: VL 8009, 1: VL 8109 için
-
 void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
 {
     // 1. Genel Sayaç ve Güvenlik Kontrolleri
@@ -433,6 +455,12 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
         swap_counters_dpm(&item.payload.counters_dpm);
         __atomic_add_fetch(&g_hm_rx_counters_dpm, 1, __ATOMIC_RELAXED);
     }
+    else if (len == HM_COUNTERS_INTER_DPM_TOTAL_LEN) {
+        item.kind = HM_ITEM_COUNTERS_INTER_DPM;
+        memcpy(&item.payload.counters_inter_dpm, body, sizeof(COUNTERS_INTER_DPM));
+        swap_counters_inter_dpm(&item.payload.counters_inter_dpm);
+        __atomic_add_fetch(&g_hm_rx_counters_inter_dpm, 1, __ATOMIC_RELAXED);
+    }
     else if (len == HM_COUNTERS_DSM_TOTAL_LEN) {
         item.kind = HM_ITEM_COUNTERS_DSM;
         memcpy(&item.payload.counters_dsm, body, sizeof(COUNTERS_DSM));
@@ -499,6 +527,20 @@ void hm_print_dashboard(void)
         }
     }
 
+    // VL-ID artan, ardından kind artan sıraya göre sırala (insertion sort).
+    // Sonuç: DPM-1 (2021) → DPM-5 (2105) → DSM-A (8009) → DSM-B (8109).
+    for (size_t a = 1; a < dedup_n; a++) {
+        struct dedup_entry tmp = dedup[a];
+        size_t b = a;
+        while (b > 0 &&
+               (dedup[b - 1].vl_id > tmp.vl_id ||
+                (dedup[b - 1].vl_id == tmp.vl_id && dedup[b - 1].kind > tmp.kind))) {
+            dedup[b] = dedup[b - 1];
+            b--;
+        }
+        dedup[b] = tmp;
+    }
+
     printf("\n\n");
     printf("################################################################################\n");
     printf("###  CMC HEALTH MONITOR DASHBOARD — tick %-6lu  drained=%-4zu  unique=%-3zu     ###\n",
@@ -515,6 +557,9 @@ void hm_print_dashboard(void)
             case HM_ITEM_COUNTERS_DPM:
                 print_counters_dpm(&it->payload.counters_dpm, it->vl_id, cnt);
                 break;
+            case HM_ITEM_COUNTERS_INTER_DPM:
+                print_counters_inter_dpm(&it->payload.counters_inter_dpm, it->vl_id, cnt);
+                break;
             case HM_ITEM_COUNTERS_DSM:
                 print_counters_dsm(&it->payload.counters_dsm, it->vl_id, cnt);
                 break;
@@ -530,22 +575,24 @@ void hm_print_dashboard(void)
         }
     }
 
-    uint64_t total       = __atomic_load_n(&g_hm_rx_total,          __ATOMIC_RELAXED);
-    uint64_t pcs_cnt     = __atomic_load_n(&g_hm_rx_pcs,             __ATOMIC_RELAXED);
-    uint64_t dpm_cnt     = __atomic_load_n(&g_hm_rx_counters_dpm,    __ATOMIC_RELAXED);
-    uint64_t dsm_cnt     = __atomic_load_n(&g_hm_rx_counters_dsm,    __ATOMIC_RELAXED);
-    uint64_t es_cnt      = __atomic_load_n(&g_hm_rx_es_mon,          __ATOMIC_RELAXED);
-    uint64_t sw_cnt      = __atomic_load_n(&g_hm_rx_sw_mon,          __ATOMIC_RELAXED);
-    uint64_t unknown_len = __atomic_load_n(&g_hm_rx_unknown_len,     __ATOMIC_RELAXED);
-    uint64_t sw_wrong    = __atomic_load_n(&g_hm_rx_sw_on_wrong_vl,  __ATOMIC_RELAXED);
-    uint64_t drops       = __atomic_load_n(&g_hm_rx_drop,            __ATOMIC_RELAXED);
+    uint64_t total          = __atomic_load_n(&g_hm_rx_total,              __ATOMIC_RELAXED);
+    uint64_t pcs_cnt        = __atomic_load_n(&g_hm_rx_pcs,                 __ATOMIC_RELAXED);
+    uint64_t dpm_cnt        = __atomic_load_n(&g_hm_rx_counters_dpm,        __ATOMIC_RELAXED);
+    uint64_t inter_dpm_cnt  = __atomic_load_n(&g_hm_rx_counters_inter_dpm,  __ATOMIC_RELAXED);
+    uint64_t dsm_cnt        = __atomic_load_n(&g_hm_rx_counters_dsm,        __ATOMIC_RELAXED);
+    uint64_t es_cnt         = __atomic_load_n(&g_hm_rx_es_mon,              __ATOMIC_RELAXED);
+    uint64_t sw_cnt         = __atomic_load_n(&g_hm_rx_sw_mon,              __ATOMIC_RELAXED);
+    uint64_t unknown_len    = __atomic_load_n(&g_hm_rx_unknown_len,         __ATOMIC_RELAXED);
+    uint64_t sw_wrong       = __atomic_load_n(&g_hm_rx_sw_on_wrong_vl,      __ATOMIC_RELAXED);
+    uint64_t drops          = __atomic_load_n(&g_hm_rx_drop,                __ATOMIC_RELAXED);
 
-    printf("[HM] tick=%lu total=%lu pcs=%lu dpm=%lu dsm=%lu es_mon=%lu sw_mon=%lu "
+    printf("[HM] tick=%lu total=%lu pcs=%lu dpm=%lu inter_dpm=%lu dsm=%lu es_mon=%lu sw_mon=%lu "
            "unknown_len=%lu sw_on_wrong_vl=%lu drops=%lu drained=%zu\n",
            (unsigned long)tick,
            (unsigned long)total,
            (unsigned long)pcs_cnt,
            (unsigned long)dpm_cnt,
+           (unsigned long)inter_dpm_cnt,
            (unsigned long)dsm_cnt,
            (unsigned long)es_cnt,
            (unsigned long)sw_cnt,

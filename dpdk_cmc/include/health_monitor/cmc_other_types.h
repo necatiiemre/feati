@@ -7,6 +7,7 @@
 
 #define SRC_MAX_CONN 20
 #define DST_MAX_CONN 8
+#define SRC_DPM_MAX_CONN 15
 
 typedef struct __attribute__((packed))
 {
@@ -27,6 +28,16 @@ typedef struct __attribute__((packed))
 	uint64_t crc_fail_count[DST_MAX_CONN];
 	uint64_t pkg_drop_count[DST_MAX_CONN];
 } COUNTERS_DSM;
+
+typedef struct __attribute__((packed))
+{
+	uint64_t send_count[SRC_DPM_MAX_CONN];
+	uint64_t send_fail_count[SRC_DPM_MAX_CONN];
+	uint64_t receive_count[SRC_DPM_MAX_CONN];
+	uint64_t crc_pass_count[SRC_DPM_MAX_CONN];
+	uint64_t crc_fail_count[SRC_DPM_MAX_CONN];
+	uint64_t pkg_drop_count[SRC_DPM_MAX_CONN];
+} COUNTERS_INTER_DPM;
 
 /*inter lrm'in haberleşme countları — DPM ve DSM ayrı paketler olarak gelir*/
 

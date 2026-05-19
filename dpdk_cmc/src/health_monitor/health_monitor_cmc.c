@@ -210,6 +210,15 @@ void print_counters_dpm(const COUNTERS_DPM *d, uint16_t vl_id, unsigned packets)
                         SRC_MAX_CONN, "SRC");
 }
 
+void print_counters_inter_dpm(const COUNTERS_INTER_DPM *d, uint16_t vl_id, unsigned packets)
+{
+    if (d == NULL) return;
+    banner(vl_id, "INTRA-LRM COUNTERS DPM", packets);
+    print_counters_body(d->send_count, d->send_fail_count, d->receive_count,
+                        d->crc_pass_count, d->crc_fail_count, d->pkg_drop_count,
+                        SRC_DPM_MAX_CONN, "SRC");
+}
+
 void print_counters_dsm(const COUNTERS_DSM *d, uint16_t vl_id, unsigned packets)
 {
     if (d == NULL) return;

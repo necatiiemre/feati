@@ -66,6 +66,7 @@ typedef enum {
     HM_ITEM_NONE = 0,
     HM_ITEM_PCS_PROFILE,        // Pcs_profile_stats
     HM_ITEM_COUNTERS_DPM,       // COUNTERS_DPM
+    HM_ITEM_COUNTERS_INTER_DPM, // COUNTERS_INTER_DPM
     HM_ITEM_COUNTERS_DSM,       // COUNTERS_DSM
     HM_ITEM_DTN_ES_MONITORING,  // tA664ESMonitoring
     HM_ITEM_DTN_SW_MONITORING,  // tA664SWMonitoring
@@ -78,6 +79,7 @@ typedef struct {
     union {
         Pcs_profile_stats   pcs;
         COUNTERS_DPM        counters_dpm;
+        COUNTERS_INTER_DPM  counters_inter_dpm;
         COUNTERS_DSM        counters_dsm;
         tA664ESMonitoring   es_mon;
         tA664SWMonitoring   sw_mon;   // status + port[12]
@@ -110,6 +112,7 @@ void hm_print_dashboard(void);
 // ============================================================================
 void print_pcs_profile_stats   (const Pcs_profile_stats   *data, uint16_t vl_id, unsigned packets);
 void print_counters_dpm        (const COUNTERS_DPM        *data, uint16_t vl_id, unsigned packets);
+void print_counters_inter_dpm  (const COUNTERS_INTER_DPM  *data, uint16_t vl_id, unsigned packets);
 void print_counters_dsm        (const COUNTERS_DSM        *data, uint16_t vl_id, unsigned packets);
 void print_dtn_es_monitoring   (const tA664ESMonitoring   *data, uint16_t vl_id, unsigned packets);
 void print_dtn_sw_monitoring   (const tA664SWMonitoring   *data, uint16_t vl_id, unsigned packets);
