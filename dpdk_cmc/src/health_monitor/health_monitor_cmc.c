@@ -57,6 +57,19 @@ static const char *fmt_temp(uint32_t v)
     return buf;
 }
 
+// SFP / SFF-8472: signed 16-bit ham değer, 1/256 °C birimi.
+// Field uint64'e gömülmüş; düşük 16 bit'i int16 olarak yorumla.
+static const char *fmt_xcvr_temp(uint64_t v)
+{
+    static char buf[24];
+    int16_t raw = (int16_t)(v & 0xFFFF);
+    int abs_raw = (raw < 0) ? -raw : raw;
+    int whole   = abs_raw / 256;
+    int frac    = (abs_raw % 256) * 100 / 256;   // 2 ondalık, truncation
+    snprintf(buf, sizeof(buf), "%s%d.%02d C", (raw < 0 ? "-" : ""), whole, frac);
+    return buf;
+}
+
 static const char *fmt_vcc(uint32_t v)
 {
     static char buf[16];
@@ -401,8 +414,13 @@ void print_dtn_sw_monitoring(const tA664SWMonitoring *d, uint16_t vl_id, unsigne
     snprintf(buf, sizeof(buf), "%s   (raw=%u)", fmt_vcc((uint32_t)s->A664_SW_INTERNAL_VOLTAGE), s->A664_SW_INTERNAL_VOLTAGE);
     printf("║  %-30s : %-74s ║\n", "INTERNAL_VOLTAGE", buf);
     
-    printf("║  %-30s : %-74" PRIu64 " ║\n", "TRANSCEIVER_TEMP", s->A664_SW_TRANSCEIVER_TEMP);
-    printf("║  %-30s : %-74" PRIu64 " ║\n", "SHARED_XCVR_TEMP", s->A664_SW_SHARED_TRANSCEIVER_TEMP);
+    snprintf(buf, sizeof(buf), "%s   (raw=%" PRIu64 ")",
+             fmt_xcvr_temp(s->A664_SW_TRANSCEIVER_TEMP), s->A664_SW_TRANSCEIVER_TEMP);
+    printf("║  %-30s : %-74s ║\n", "TRANSCEIVER_TEMP", buf);
+
+    snprintf(buf, sizeof(buf), "%s   (raw=%" PRIu64 ")",
+             fmt_xcvr_temp(s->A664_SW_SHARED_TRANSCEIVER_TEMP), s->A664_SW_SHARED_TRANSCEIVER_TEMP);
+    printf("║  %-30s : %-74s ║\n", "SHARED_XCVR_TEMP", buf);
     printf("║  %-30s : %-74" PRIu64 " ║\n", "TX_TOTAL", s->A664_SW_TOT_TX_DATA_NUM);
     printf("║  %-30s : %-74" PRIu64 " ║\n", "RX_TOTAL", s->A664_SW_TOT_RX_DATA_NUM);
     
