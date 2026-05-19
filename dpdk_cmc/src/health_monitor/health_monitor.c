@@ -337,6 +337,7 @@ static volatile uint64_t g_hm_rx_counters_inter_dpm = 0;
 static volatile uint64_t g_hm_rx_counters_dsm      = 0;
 static volatile uint64_t g_hm_rx_es_mon            = 0;
 static volatile uint64_t g_hm_rx_sw_mon            = 0;
+static volatile uint64_t g_hm_rx_sw_p2_orphan      = 0;
 static volatile uint64_t g_hm_rx_unknown_len       = 0;
 static volatile uint64_t g_hm_rx_sw_on_wrong_vl    = 0;
 static volatile uint64_t g_hm_rx_drop              = 0;
@@ -409,31 +410,36 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
     item.rx_timestamp_ns = now_ns();
 
     // 2. SW_MON Parça Birleştirme (Reassembly) Mantığı
+    // VL 8009/8109 üzerindeki Part-1 (1401) ve Part-2 (945) paketleri burada
+    // tüketilir; firmware A/B redundancy sebebiyle Part-2'yi bir tick içinde
+    // iki kez gönderebildiği için ilk Part-2 reassembly'yi kapatır, ikinci
+    // Part-2 orphan kalır → sayılır ve sessizce drop edilir (unknown_record'a
+    // düşürmüyoruz, dashboard kirlenmesin diye).
     int sw_idx = get_sw_idx(vl_id);
     if (sw_idx != -1) {
-        // PARÇA 1 (1401 B)
         if (len == SW_MON_PART1_TOTAL_LEN) {
             memcpy(g_sw_reassembly[sw_idx].buffer, body, SW_MON_PART1_DATA_LEN);
             g_sw_reassembly[sw_idx].part1_received = true;
-            return; // İkinci parçayı bekle
-        } 
-        // PARÇA 2 (945 B)
-        else if (len == SW_MON_PART2_TOTAL_LEN) {
-            if (g_sw_reassembly[sw_idx].part1_received) {
-                // Buffer'ın arkasına ekle (1400. byte'tan itibaren)
-                memcpy(g_sw_reassembly[sw_idx].buffer + SW_MON_PART1_DATA_LEN, body, SW_MON_PART2_DATA_LEN);
-                
-                item.kind = HM_ITEM_DTN_SW_MONITORING;
-                memcpy(&item.payload.sw_mon, g_sw_reassembly[sw_idx].buffer, SW_MON_FULL_DATA_LEN);
-                
-                swap_sw(&item.payload.sw_mon); // Endianness düzenle
-                __atomic_add_fetch(&g_hm_rx_sw_mon, 1, __ATOMIC_RELAXED);
-                
-                g_sw_reassembly[sw_idx].part1_received = false; // Resetle
-                hm_ring_push(&item);
+            return;
+        }
+        if (len == SW_MON_PART2_TOTAL_LEN) {
+            if (!g_sw_reassembly[sw_idx].part1_received) {
+                __atomic_add_fetch(&g_hm_rx_sw_p2_orphan, 1, __ATOMIC_RELAXED);
                 return;
             }
+            memcpy(g_sw_reassembly[sw_idx].buffer + SW_MON_PART1_DATA_LEN,
+                   body, SW_MON_PART2_DATA_LEN);
+            item.kind = HM_ITEM_DTN_SW_MONITORING;
+            memcpy(&item.payload.sw_mon, g_sw_reassembly[sw_idx].buffer,
+                   SW_MON_FULL_DATA_LEN);
+            swap_sw(&item.payload.sw_mon);
+            __atomic_add_fetch(&g_hm_rx_sw_mon, 1, __ATOMIC_RELAXED);
+            g_sw_reassembly[sw_idx].part1_received = false;
+            hm_ring_push(&item);
+            return;
         }
+        // 8009/8109 üzerinden gelen ama fragment boyutu olmayan paketler
+        // (PCS / ES_MON / DSM vb.) aşağıdaki standart dispatcher'a düşer.
     }
 
     // 3. Standart (Tek Parçalı) Paketlerin Dispatch Edilmesi
@@ -582,12 +588,13 @@ void hm_print_dashboard(void)
     uint64_t dsm_cnt        = __atomic_load_n(&g_hm_rx_counters_dsm,        __ATOMIC_RELAXED);
     uint64_t es_cnt         = __atomic_load_n(&g_hm_rx_es_mon,              __ATOMIC_RELAXED);
     uint64_t sw_cnt         = __atomic_load_n(&g_hm_rx_sw_mon,              __ATOMIC_RELAXED);
+    uint64_t sw_p2_orphan   = __atomic_load_n(&g_hm_rx_sw_p2_orphan,        __ATOMIC_RELAXED);
     uint64_t unknown_len    = __atomic_load_n(&g_hm_rx_unknown_len,         __ATOMIC_RELAXED);
     uint64_t sw_wrong       = __atomic_load_n(&g_hm_rx_sw_on_wrong_vl,      __ATOMIC_RELAXED);
     uint64_t drops          = __atomic_load_n(&g_hm_rx_drop,                __ATOMIC_RELAXED);
 
     printf("[HM] tick=%lu total=%lu pcs=%lu dpm=%lu inter_dpm=%lu dsm=%lu es_mon=%lu sw_mon=%lu "
-           "unknown_len=%lu sw_on_wrong_vl=%lu drops=%lu drained=%zu\n",
+           "sw_p2_orphan=%lu unknown_len=%lu sw_on_wrong_vl=%lu drops=%lu drained=%zu\n",
            (unsigned long)tick,
            (unsigned long)total,
            (unsigned long)pcs_cnt,
@@ -596,6 +603,7 @@ void hm_print_dashboard(void)
            (unsigned long)dsm_cnt,
            (unsigned long)es_cnt,
            (unsigned long)sw_cnt,
+           (unsigned long)sw_p2_orphan,
            (unsigned long)unknown_len,
            (unsigned long)sw_wrong,
            (unsigned long)drops,
