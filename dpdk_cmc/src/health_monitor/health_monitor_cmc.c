@@ -50,10 +50,14 @@ static const char *fmt_ver(uint64_t v)
     return buf;
 }
 
-static const char *fmt_temp(uint32_t v)
+// 1/100 °C birimi, signed. Negatif sıcaklıkları doğru yorumlamak için
+// çağıran taraf uint→signed cast'i (gerekirse sign-extend ile) yapmalı.
+static const char *fmt_temp(int32_t v)
 {
     static char buf[16];
-    snprintf(buf, sizeof(buf), "%u.%02u C", v / 100u, v % 100u);
+    int abs_v = (v < 0) ? -v : v;
+    snprintf(buf, sizeof(buf), "%s%d.%02d C",
+             (v < 0 ? "-" : ""), abs_v / 100, abs_v % 100);
     return buf;
 }
 
@@ -299,7 +303,8 @@ void print_dtn_es_monitoring(const tA664ESMonitoring *d, uint16_t vl_id, unsigne
     // ========================================================================
     hr();
     printf("║  " C_BOLD C_CYAN "%-107s" C_RESET " ║\n", "[ HW & LINK ]");
-    snprintf(buf, sizeof(buf), "%s   (raw=%u)", fmt_temp(d->A664_ES_HW_TEMP), d->A664_ES_HW_TEMP);
+    snprintf(buf, sizeof(buf), "%s   (raw=%u)",
+             fmt_temp((int32_t)d->A664_ES_HW_TEMP), d->A664_ES_HW_TEMP);
     printf("║  %-30s : %-74s ║\n", "HW_TEMP", buf);
     
     snprintf(buf, sizeof(buf), "%s   (raw=%u)", fmt_vcc(d->A664_ES_HW_VCC_INT), d->A664_ES_HW_VCC_INT);
@@ -408,7 +413,8 @@ void print_dtn_sw_monitoring(const tA664SWMonitoring *d, uint16_t vl_id, unsigne
     printf("║  %-30s : %-74u ║\n", "UPSTREAM_MODE", s->A664_SW_UPSTREAM_MODE_STATUS);
     printf("║  %-30s : %-74" PRIu64 " ║\n", "VENDOR_TYPE", (uint64_t)s->A664_SW_VENDOR_TYPE);
     
-    snprintf(buf, sizeof(buf), "%s   (raw=%u)", fmt_temp((uint32_t)s->A664_SW_TEMPERATURE), s->A664_SW_TEMPERATURE);
+    snprintf(buf, sizeof(buf), "%s   (raw=%u)",
+             fmt_temp((int32_t)(int16_t)s->A664_SW_TEMPERATURE), s->A664_SW_TEMPERATURE);
     printf("║  %-30s : %-74s ║\n", "TEMPERATURE", buf);
     
     snprintf(buf, sizeof(buf), "%s   (raw=%u)", fmt_vcc((uint32_t)s->A664_SW_INTERNAL_VOLTAGE), s->A664_SW_INTERNAL_VOLTAGE);
